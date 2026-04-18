@@ -6,6 +6,7 @@ var DEFAULT_CONFIG = {
   SHEET_STATE: 'state',
   SHEET_RUN_LOG: 'run_log',
   SHEET_ITEM_LOG: 'item_log',
+  SHEET_PUBLIC_ITEM_LOG: 'public_item_log',
   TIMEZONE: 'Asia/Tokyo',
 };
 
@@ -51,6 +52,13 @@ var SHEET_DEFINITIONS = {
     'slack_status',
     'raw_region_text',
   ],
+  public_item_log: [
+    'executed_at',
+    'title',
+    'link',
+    'published_at',
+    'matched_regions',
+  ],
 };
 
 var PREFECTURES = [
@@ -74,6 +82,7 @@ function initializeProject() {
   var spreadsheet = getSpreadsheet_();
   ensureSheets_(spreadsheet);
   ensureConfigRows_(spreadsheet);
+  ensurePublicSheet_();
   ensureDailyTrigger_();
 }
 
@@ -125,6 +134,7 @@ function runDaily() {
     };
 
     appendItemLogs_(spreadsheet, runId, executedAt, matchedItems, newItems, slackStatus);
+    syncPublicItemLog_(spreadsheet);
     appendRunLog_(spreadsheet, runId, executedAt, runSummary);
   } catch (error) {
     runSummary.notificationStatus = 'error';
@@ -133,6 +143,7 @@ function runDaily() {
     try {
       if (spreadsheet) {
         appendItemLogs_(spreadsheet, runId, executedAt, matchedItems, newItems, 'error');
+        syncPublicItemLog_(spreadsheet);
         appendRunLog_(spreadsheet, runId, executedAt, runSummary);
       }
     } catch (logError) {
@@ -153,6 +164,7 @@ function setupSheets() {
   var spreadsheet = getSpreadsheet_();
   ensureSheets_(spreadsheet);
   ensureConfigRows_(spreadsheet);
+  ensurePublicSheet_();
 }
 
 function fetchRssItems_(rssUrl) {
@@ -252,6 +264,7 @@ function buildSlackMessage_(newItems, targetRegions, executedAt) {
     'yyyy/MM/dd'
   );
   var regionLabel = targetRegions.join('、');
+  var publicSpreadsheetUrl = getPublicSpreadsheetUrl_();
 
   var lines = [
     '*J-Net21 当日分の新着補助金・助成金・融資情報*',
@@ -275,6 +288,8 @@ function buildSlackMessage_(newItems, targetRegions, executedAt) {
   });
 
   lines.push('確認時刻: ' + timestamp);
+  lines.push('過去の配信履歴は下記リンク先にまとめてあります。');
+  lines.push(publicSpreadsheetUrl);
   return lines.join('\n');
 }
 
@@ -417,9 +432,10 @@ function appendItemLogs_(spreadsheet, runId, executedAt, matchedItems, newItems,
   var newItemIds = newItems.map(function(item) {
     return item.externalId;
   });
+  var rows = [];
 
   if (matchedItems.length === 0) {
-    sheet.appendRow([
+    rows.push([
       runId,
       executedAt,
       '',
@@ -432,12 +448,13 @@ function appendItemLogs_(spreadsheet, runId, executedAt, matchedItems, newItems,
       slackStatus,
       '',
     ]);
+    prependRows_(sheet, rows);
     return;
   }
 
   matchedItems.forEach(function(item) {
     var isNew = newItemIds.indexOf(item.externalId) !== -1;
-    sheet.appendRow([
+    rows.push([
       runId,
       executedAt,
       item.externalId,
@@ -451,10 +468,59 @@ function appendItemLogs_(spreadsheet, runId, executedAt, matchedItems, newItems,
       item.rawRegionText,
     ]);
   });
+
+  prependRows_(sheet, rows);
+}
+
+function syncPublicItemLog_(spreadsheet) {
+  var sourceSheet = spreadsheet.getSheetByName(DEFAULT_CONFIG.SHEET_ITEM_LOG);
+  var publicSpreadsheet = getPublicSpreadsheet_();
+  var targetSheet = ensurePublicSheet_(publicSpreadsheet);
+  var values = sourceSheet.getDataRange().getValues();
+  var headers = SHEET_DEFINITIONS.public_item_log;
+  var rows = values.slice(1)
+    .map(function(row) {
+      return [
+        row[1],
+        row[3],
+        row[4],
+        row[5],
+        row[6],
+      ];
+    })
+    .filter(function(row) {
+      return row[1] || row[2] || row[3] || row[4];
+    })
+    .sort(function(a, b) {
+      var timeA = new Date(a[0]).getTime();
+      var timeB = new Date(b[0]).getTime();
+      return timeB - timeA;
+    });
+
+  targetSheet.clearContents();
+  targetSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  targetSheet.setFrozenRows(1);
+
+  if (rows.length > 0) {
+    targetSheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  }
+}
+
+function prependRows_(sheet, rows) {
+  if (!rows || rows.length === 0) {
+    return;
+  }
+
+  sheet.insertRowsBefore(2, rows.length);
+  sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
 }
 
 function ensureSheets_(spreadsheet) {
   Object.keys(SHEET_DEFINITIONS).forEach(function(sheetName) {
+    if (sheetName === DEFAULT_CONFIG.SHEET_PUBLIC_ITEM_LOG) {
+      return;
+    }
+
     var headers = SHEET_DEFINITIONS[sheetName];
     var sheet = spreadsheet.getSheetByName(sheetName);
 
@@ -493,6 +559,23 @@ function ensureConfigRows_(spreadsheet) {
     sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAppend.length, rowsToAppend[0].length)
       .setValues(rowsToAppend);
   }
+}
+
+function ensurePublicSheet_(publicSpreadsheet) {
+  var spreadsheet = publicSpreadsheet || getPublicSpreadsheet_();
+  var headers = SHEET_DEFINITIONS.public_item_log;
+  var sheet = spreadsheet.getSheetByName(DEFAULT_CONFIG.SHEET_PUBLIC_ITEM_LOG);
+
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(DEFAULT_CONFIG.SHEET_PUBLIC_ITEM_LOG);
+  }
+
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+  }
+
+  return sheet;
 }
 
 function ensureDailyTrigger_() {
@@ -545,6 +628,24 @@ function getSpreadsheet_() {
   }
 
   throw new Error('Active Spreadsheet が見つかりません。Script Properties に SPREADSHEET_ID を設定するか、スプレッドシート紐づきで実行してください。');
+}
+
+function getPublicSpreadsheet_() {
+  var spreadsheetId = PropertiesService.getScriptProperties().getProperty('PUBLIC_SPREADSHEET_ID');
+  if (!spreadsheetId) {
+    throw new Error('Script Properties に PUBLIC_SPREADSHEET_ID を設定してください。');
+  }
+
+  return SpreadsheetApp.openById(spreadsheetId);
+}
+
+function getPublicSpreadsheetUrl_() {
+  var spreadsheetUrl = PropertiesService.getScriptProperties().getProperty('PUBLIC_SPREADSHEET_URL');
+  if (!spreadsheetUrl) {
+    throw new Error('Script Properties に PUBLIC_SPREADSHEET_URL を設定してください。');
+  }
+
+  return spreadsheetUrl;
 }
 
 function getChildText_(element, childName) {
