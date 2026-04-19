@@ -2,6 +2,8 @@
 
 J-Net21 の支援情報ヘッドライン RSS を平日 1 日 1 回確認し、対象地域に合致する当日分の新着の補助金・助成金・融資情報を Slack Incoming Webhook に投稿する Google Apps Script です。送信内容は Google Spreadsheet にログとして保存します。
 
+作成の背景など : https://muhenkou.net/?p=10433
+
 ## できること
 
 - J-Net21 RSS の平日日次チェック
