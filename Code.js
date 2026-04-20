@@ -194,8 +194,7 @@ function fetchRssItems_(rssUrl) {
     var description = sanitizeDescription_(htmlToText_(getChildText_(item, 'description')));
     var guid = getChildText_(item, 'guid') || link || title;
     var publishedAt = getDcDateText_(item) || getChildText_(item, 'pubDate');
-    var sourceText = [title, description].join('\n');
-    var detectedRegions = detectRegions_(sourceText);
+    var detectedRegions = getCoverageLabels_(item);
 
     return {
       externalId: buildExternalId_(guid, title, publishedAt),
@@ -204,7 +203,7 @@ function fetchRssItems_(rssUrl) {
       description: description,
       publishedAt: publishedAt,
       detectedRegions: detectedRegions,
-      rawRegionText: sourceText,
+      rawRegionText: detectedRegions.join(','),
     };
   });
 }
@@ -227,29 +226,18 @@ function filterItemsByRegions_(items, targetRegions) {
   });
 }
 
-function detectRegions_(text) {
-  var detected = [];
-  var normalizedText = normalizeText_(text);
-
-  PREFECTURES.forEach(function(prefecture) {
-    var variants = prefectureVariants_(prefecture);
-    var isMatched = variants.some(function(variant) {
-      return normalizedText.indexOf(normalizeText_(variant)) !== -1;
-    });
-
-    if (isMatched) {
-      detected.push(prefecture);
-    }
-  });
-
-  var nationwideKeywords = ['全国', '日本全国', '全国対象', '全国対応'];
-  if (nationwideKeywords.some(function(keyword) {
-    return normalizedText.indexOf(normalizeText_(keyword)) !== -1;
-  })) {
-    detected.push('全国');
+function getCoverageLabels_(item) {
+  var coverage = item.getChild('coverage', XML_NAMESPACES.dc);
+  if (!coverage) {
+    return [];
   }
 
-  return unique_(detected);
+  var label = coverage.getChild('label', XML_NAMESPACES.rdf);
+  if (!label) {
+    return [];
+  }
+
+  return unique_([label.getText().trim()]).filter(Boolean);
 }
 
 function buildSlackMessage_(newItems, targetRegions, executedAt) {
@@ -275,15 +263,7 @@ function buildSlackMessage_(newItems, targetRegions, executedAt) {
   ];
 
   newItems.forEach(function(item, index) {
-    var regions = item.matchedRegions && item.matchedRegions.length > 0
-      ? item.matchedRegions.join('、')
-      : '地域情報なし';
     lines.push((index + 1) + '. <' + item.link + '|' + escapeSlackText_(item.title) + '>');
-    lines.push('公開日: ' + (item.publishedAt || '不明'));
-    lines.push('対象地域: ' + regions);
-    if (item.description) {
-      lines.push('概要: ' + item.description);
-    }
     lines.push('');
   });
 
